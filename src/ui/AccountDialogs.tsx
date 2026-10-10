@@ -1,3 +1,4 @@
+import { wikiMode } from "../account/wikiStorage";
 /**
  * 网站账号的几个窗口(电脑是居中的弹窗,手机是从下面升起的卡片):
  *
@@ -60,6 +61,7 @@ function useUi() {
 }
 
 export function openLogin(): void {
+  if (wikiMode()) { window.top!.location.href = '/'; return; }
   panel = { kind: 'login' };
   emit();
 }
@@ -490,7 +492,7 @@ function AccountDialog({ phone, onClose }: { phone: boolean; onClose: () => void
     void listTrash()
       .then((t) => live && setTrashList(t))
       .catch(() => {});
-    void listShares()
+    if (!wikiMode()) void listShares()
       .then((l) => live && setShares(l))
       .catch(() => live && setShares([]));
     void refreshOfficialAccount();
@@ -535,7 +537,7 @@ function AccountDialog({ phone, onClose }: { phone: boolean; onClose: () => void
           <div className="acct-who-text">
             <h2>{displayName(s.user)}</h2>
             <div className="acct-small">
-              {s.user.account.includes('@') ? '邮箱' : '手机号'} {s.user.account}
+              {wikiMode() ? 'Wiki 账号' : s.user.account.includes('@') ? '邮箱' : '手机号'} {s.user.account}
             </div>
           </div>
           <CloseX onClose={onClose} />
@@ -547,7 +549,7 @@ function AccountDialog({ phone, onClose }: { phone: boolean; onClose: () => void
           <div className="acct-gr" data-row="sync">
             <Icon name="cloudok" size={19} />
             <span className="main">
-              <b>云同步</b>
+              <b>{wikiMode() ? "服务器存储" : "云同步"}</b>
             </span>
             <span className={`side${syncText.warn ? ' warn' : ''}`}>{syncText.text}</span>
           </div>
@@ -559,7 +561,7 @@ function AccountDialog({ phone, onClose }: { phone: boolean; onClose: () => void
             <span className="side">{trashText}</span>
             <Icon name="chevron" size={14} className="chev" />
           </button>
-          {aiOn && (
+          {aiOn && !wikiMode() && (
             <button
               className="acct-gr"
               data-act="open-credits"
@@ -620,7 +622,7 @@ function AccountDialog({ phone, onClose }: { phone: boolean; onClose: () => void
         )}
         {err && <p className="acct-err">{err}</p>}
       </div>
-      <div className="acct-foot">
+      {!wikiMode() && <div className="acct-foot">
         <button className="acct-link red" data-act="delete-account" onClick={() => go('delete')}>
           注销账号
         </button>
@@ -629,7 +631,7 @@ function AccountDialog({ phone, onClose }: { phone: boolean; onClose: () => void
           <Icon name="logout" size={16} />
           退出登录
         </button>
-      </div>
+      </div>}
     </Dialog>
   );
 }

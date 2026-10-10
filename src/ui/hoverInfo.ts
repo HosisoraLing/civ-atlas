@@ -154,7 +154,7 @@ export function hoverInfo(p: {
       }
       case 'plates': {
         const plate = world.tect.plate[cell];
-        info.extra = plate === undefined ? '' : `${world.tect.plateContinental[plate] ? '大陆' : '大洋'}板块 #${plate + 1}`;
+        info.extra = plate === undefined ? '' : `${world.tect.plateSmall ? world.tect.plateSmall[plate] ? '小型' : '大型' : ''}${world.tect.plateContinental[plate] ? '大陆' : '大洋'}板块 #${plate + 1}`;
         break;
       }
       default:

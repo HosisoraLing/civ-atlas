@@ -4,7 +4,8 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SseParser, readSse } from '../src/ai/sse';
 import { aiChat, getAiStatus } from '../src/ai/client';
-import { chooseProvider, setSecret, updateAiSettings } from '../src/ai/settings';
+import { addCustomProvider, getCustomProvider, getCustomSecret, updateCustomProvider, removeCustomProvider, setCustomSecret, chooseProvider, setSecret, updateAiSettings, getAiSettings, getSecrets, sanitizeSettings, scrubSecrets, resetAiSettingsForTest } from '../src/ai/settings';
+import { customEndpoint, customProvider } from '../src/ai/providers/custom';
 import { setupAi } from '../src/ai/setup';
 import { getCallLog } from '../src/ai/callLog';
 import { compatBody, compatChat } from '../src/ai/providers/compat';
@@ -23,6 +24,125 @@ import { createFakeAiServer, FAKE_CODE } from '../scripts/lib/fakeAiServer';
 import { getSession } from '../src/account/session';
 
 const KEY = 'sk-test-secret-0123456789';
+function configureCustom(p: { name?: string; baseUrl: string; model: string }): string {
+  const id = addCustomProvider();
+  updateCustomProvider(id, { ...p, models: [p.model] });
+  return id;
+}
+
+describe('自定义 OpenAI 兼容服务商', () => {
+  it('接受 Base URL 或完整端点，拒绝凭据和非 HTTP 地址', () => {
+    expect(customEndpoint('https://provider.test/v1/')).toBe('https://provider.test/v1/chat/completions');
+    expect(customEndpoint('http://localhost:1234/v1/chat/completions')).toBe('http://localhost:1234/v1/chat/completions');
+    for (const url of ['file:///tmp/api', 'javascript:alert(1)', 'https://user:password@provider.test/v1', 'https://provider.test/v1?key=secret', 'https://provider.test/v1#key']) expect(() => customEndpoint(url)).toThrow(AiError);
+    expect(sanitizeSettings({ provider: 'custom', custom: { baseUrl: 'https://provider.test/v1', model: 'model-name' } }).customProviders[0].model).toBe('model-name');
+  });
+  it('通过统一 AI 入口发送模型、工具和流式结果，密钥只放请求头', async () => {
+    const id = configureCustom({ name: '测试服务', baseUrl: 'https://provider.test/v1', model: 'custom-model' });
+    setCustomSecret(id, KEY); chooseProvider('custom');
+    const calls = fakeFetch(() => sseResponse(sseBody([
+      { model: 'custom-model', choices: [{ delta: { content: '你好', tool_calls: [{ index: 0, id: 'tool_1', function: { name: 'lookup', arguments: '{"year":100}' } }] }, finish_reason: 'tool_calls' }] },
+      { usage: { prompt_tokens: 10, completion_tokens: 4 }, choices: [] },
+    ])));
+    const result = await aiChat({ ...REQ, json: true, tools: [{ name: 'lookup', description: '查询历史', parameters: { type: 'object' } }] });
+    expect(result.provider).toBe('custom'); expect(result.text).toBe('你好'); expect(result.toolCalls?.[0].name).toBe('lookup');
+    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 4 });
+    expect(getAiStatus().label).toBe('测试服务');
+    expect(calls[0].url).toBe('https://provider.test/v1/chat/completions');
+    expect(calls[0].headers.authorization).toBe('Bearer ' + KEY);
+    expect(calls[0].body.model).toBe('custom-model'); expect(calls[0].body.response_format).toEqual({ type: 'json_object' });
+    expect(JSON.stringify(calls[0].body)).not.toContain(KEY);
+    expect(JSON.stringify(await getCallLog())).not.toContain(KEY);
+  });
+  it('服务商报错中回显的自定义密钥会被遮掉，未配置时不联网', async () => {
+    const id = configureCustom({ baseUrl: 'https://provider.test/v1', model: 'custom-model' });
+    setCustomSecret(id, KEY); chooseProvider('custom');
+    fakeFetch(() => errResponse(401, { message: 'Invalid key ' + KEY }));
+    await expect(aiChat(REQ)).rejects.toMatchObject({ code: 'auth' });
+    expect(JSON.stringify(await getCallLog())).not.toContain(KEY);
+    expect(scrubSecrets(KEY)).toBe('***');
+    setCustomSecret(id, ''); expect(customProvider.status().ready).toBe(false);
+    const calls = fakeFetch(() => { throw Error('must not fetch'); });
+    await expect(customProvider.chat(REQ, {})).rejects.toMatchObject({ code: 'not-configured' });
+    expect(calls).toHaveLength(0);
+  });
+  it('按记住密钥开关恢复或移除配置，不将密钥存进普通设置', () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => stored.set(key, value), removeItem: (key: string) => stored.delete(key) });
+    resetAiSettingsForTest();
+    updateAiSettings({ remember: true });
+    const id = configureCustom({ baseUrl: 'https://provider.test/v1', model: 'restored-model' }); setCustomSecret(id, KEY); chooseProvider('custom');
+    expect(stored.get('civ-atlas:ai-settings')).not.toContain(KEY);
+    resetAiSettingsForTest(); expect(getAiSettings().provider).toBe('custom'); expect(getCustomSecret(id)).toBe(KEY);
+    updateAiSettings({ remember: false }); expect(stored.has('civ-atlas:ai-secrets')).toBe(false);
+    resetAiSettingsForTest(); expect(getCustomSecret(id)).toBe('');
+  });
+});
+
+describe('多个自定义服务商与模型', () => {
+  it('旧单服务商、选中模型和密钥自动迁移，不把密钥混入普通设置', () => {
+    const stored = new Map([
+      ['civ-atlas:ai-settings', JSON.stringify({ provider: 'custom', remember: true, custom: { name: '旧服务', baseUrl: 'https://old.test/v1', model: 'old-model' } })],
+      ['civ-atlas:ai-secrets', JSON.stringify({ custom: KEY, deepseek: 'deepseek-test-key' })],
+    ]);
+    vi.stubGlobal('localStorage', { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, v: string) => stored.set(k, v), removeItem: (k: string) => stored.delete(k) });
+    resetAiSettingsForTest();
+    expect(getCustomProvider()).toEqual({ id: 'custom-legacy', name: '旧服务', baseUrl: 'https://old.test/v1', models: ['old-model'], model: 'old-model' });
+    expect(getCustomSecret('custom-legacy')).toBe(KEY);
+    expect(getSecrets().deepseek).toBe('deepseek-test-key');
+    expect(JSON.parse(stored.get('civ-atlas:ai-settings')!)).not.toHaveProperty('custom');
+    expect(stored.get('civ-atlas:ai-settings')).not.toContain(KEY);
+    resetAiSettingsForTest(); expect(getCustomSecret('custom-legacy')).toBe(KEY);
+  });
+  it('切换服务商和模型后，只发送所选端点、模型和独立密钥', async () => {
+    const first = configureCustom({ name: '甲', baseUrl: 'https://first.test/v1', model: 'first-one' });
+    updateCustomProvider(first, { models: ['first-one', 'first-two'], model: 'first-two' });setCustomSecret(first, 'first-secret-key');
+    const second = configureCustom({ name: '乙', baseUrl: 'https://second.test/v1', model: 'second-one' });
+    updateCustomProvider(second, { models: ['second-one', 'second-two'] });setCustomSecret(second, 'second-secret-key');chooseProvider('custom');
+    const calls = fakeFetch(c => new Response(JSON.stringify({ choices: [{ message: { content: '你好' } }], model: c.body.model }), { headers: { 'content-type': 'application/json' } }));
+    await aiChat(REQ);
+    updateAiSettings({ customProviderId: first });await aiChat(REQ);
+    updateCustomProvider(first, { model: 'first-one' });await aiChat(REQ);
+    expect(calls.map(c => [c.url, c.body.model, c.headers.authorization])).toEqual([
+      ['https://second.test/v1/chat/completions', 'second-one', 'Bearer second-secret-key'],
+      ['https://first.test/v1/chat/completions', 'first-two', 'Bearer first-secret-key'],
+      ['https://first.test/v1/chat/completions', 'first-one', 'Bearer first-secret-key'],
+    ]);
+    expect(getAiStatus().label).toBe('甲');
+    expect(getCallLog().calls.find(c => c.model === 'first-two')?.providerLabel).toBe('甲');
+    expect(getCallLog().calls.find(c => c.model === 'second-one')?.providerLabel).toBe('乙');
+  });
+  it('删除模型和服务商会选择有效后备，清理对应密钥，忘记开关同时清理全部密钥', () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, v: string) => stored.set(k, v), removeItem: (k: string) => stored.delete(k) });
+    resetAiSettingsForTest();
+    const first = configureCustom({ baseUrl: 'https://first.test/v1', model: 'one' });setCustomSecret(first, 'first-secret-key');
+    updateCustomProvider(first, { models: ['one', 'two'], model: 'two' });
+    updateCustomProvider(first, { models: ['one'] });expect(getCustomProvider()?.model).toBe('one');
+    const second = configureCustom({ baseUrl: 'https://second.test/v1', model: 'three' });setCustomSecret(second, 'second-secret-key');
+    resetAiSettingsForTest();expect(getAiSettings().customProviderId).toBe(second);expect(getCustomSecret(first)).toBe('first-secret-key');
+    removeCustomProvider(second);expect(getAiSettings().customProviderId).toBe(first);expect(getCustomSecret(second)).toBe('');
+    expect(stored.get('civ-atlas:ai-secrets')).not.toContain('second-secret-key');
+    updateAiSettings({ remember: false });expect(stored.has('civ-atlas:ai-secrets')).toBe(false);
+    resetAiSettingsForTest();expect(getCustomSecret(first)).toBe('');
+    removeCustomProvider(first);expect(getCustomProvider()).toBeUndefined();expect(customProvider.status().ready).toBe(false);
+  });
+  it('请求期间删除服务商，服务商报错回显的原密钥仍不会进入日志', async () => {
+    const id = configureCustom({ baseUrl: 'https://first.test/v1', model: 'one' });const key = 'removed-provider-secret';setCustomSecret(id, key);chooseProvider('custom');
+    let release!: (r: Response) => void;
+    const pending = new Promise<Response>(resolve => { release = resolve; });fakeFetch(() => pending);
+    const request = aiChat(REQ);removeCustomProvider(id);release(errResponse(401, { message: 'Invalid credential ' + key }));
+    const error = await request.catch(e => e);expect(error.code).toBe('auth');expect(error.message).not.toContain(key);
+    expect(JSON.stringify(await getCallLog())).not.toContain(key);
+  });
+  it('坏设置和重复模型不产生孤立选择或串用密钥', () => {
+    const s = sanitizeSettings({ customProviderId: 'missing', customProviders: [
+      { id: 'custom-test', name: '甲', models: ['one', 'one', null, ' two '], model: 'missing' },
+      { id: 'custom-test', models: ['duplicate'] }, { id: '__proto__', models: ['bad'] }, null,
+    ] });
+    expect(s.customProviders).toHaveLength(1);expect(s.customProviders[0].models).toEqual(['one', 'two']);expect(s.customProviders[0].model).toBe('one');expect(s.customProviderId).toBe('custom-test');
+  });
+});
 
 /** 把字符串按给定的字节块切开,做成一个流(模拟网络上任意位置断开) */
 function byteStream(text: string, cut = 7): ReadableStream<Uint8Array> {
@@ -331,9 +451,9 @@ describe('我们的 AI(开发假服务器,假 fetch 直连,不开端口)', () =>
   it('没选 AI 时的说明:我们的 AI 开放了才提它', () => {
     chooseProvider(null);
     setOfficialServerForTest(null);
-    expect(getAiStatus().reason).toBe('还没有设置 AI:可以填上自己的 DeepSeek / 阿里云百炼密钥');
+    expect(getAiStatus().reason).toBe('还没有设置 AI:可以填上自己的 DeepSeek / 阿里云百炼密钥，或配置自定义服务');
     setOfficialServerForTest('http://fake-ai.test');
-    expect(getAiStatus().reason).toBe('还没有设置 AI:可以用我们提供的 AI(消耗积分),或填上自己的 DeepSeek / 阿里云百炼密钥');
+    expect(getAiStatus().reason).toBe('还没有设置 AI:可以用我们提供的 AI(消耗积分),或填上自己的 DeepSeek / 阿里云百炼密钥，或配置自定义服务');
     setOfficialServerForTest(undefined);
   });
 
@@ -524,7 +644,7 @@ describe('工具调用(助手用,假 fetch)', () => {
   /** 一个工具调用拆成好几段送来(两个调用交错) */
   const toolChunk = (calls: unknown[], finish?: string) => ({ id: 'x', model: 'deepseek-flash', choices: [{ index: 0, delta: { tool_calls: calls }, ...(finish ? { finish_reason: finish } : {}) }] });
 
-  it('DeepSeek:请求里带 tools、tool_choice,交回的消息按 OpenAI 写法;分段送来的调用拼回完整;深度思考开着也关掉', async () => {
+  it('DeepSeek:请求里带 tools、tool_choice,交回的消息按 OpenAI 写法;分段送来的调用拼回完整;保留思考开关', async () => {
     setSecret('deepseek', KEY);
     chooseProvider('deepseek');
     updateAiSettings({ deepseek: { thinking: true } });
@@ -548,7 +668,7 @@ describe('工具调用(助手用,假 fetch)', () => {
       { id: 'call_2', name: 'situation', args: '{"year":2850}' },
     ]);
     const body = calls[0].body;
-    expect(body.thinking).toEqual({ type: 'disabled' });
+    expect(body.thinking).toEqual({ type: 'enabled' });
     expect(body.tool_choice).toBe('auto');
     expect(body.tools).toEqual(TOOLS!.map((t) => ({ type: 'function', function: t })));
     expect(body.messages[2]).toEqual({
@@ -567,7 +687,7 @@ describe('工具调用(助手用,假 fetch)', () => {
     updateAiSettings({ deepseek: { thinking: false } });
   });
 
-  it('百炼:带工具时不开深度思考;只回工具调用、没有正文不算出错', async () => {
+  it('百炼:带工具时保留深度思考;只回工具调用、没有正文不算出错', async () => {
     setSecret('bailian', KEY);
     chooseProvider('bailian');
     updateAiSettings({ bailian: { thinking: true } });
@@ -580,7 +700,7 @@ describe('工具调用(助手用,假 fetch)', () => {
       ),
     );
     const r = await aiChat({ ...ROUND2, toolChoice: 'none' });
-    expect(calls[0].body.enable_thinking).toBe(false);
+    expect(calls[0].body.enable_thinking).toBe(true);
     expect(calls[0].body.tool_choice).toBe('none');
     expect(r.text).toBe('我先查一下。');
     expect(r.toolCalls).toEqual([{ id: 'call_q', name: 'country', args: '{"country":"P3"}' }]);

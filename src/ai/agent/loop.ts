@@ -46,6 +46,7 @@ export type AgentEvent =
   | { type: 'round'; round: number }
   /** 这一轮模型正在说的话(到目前为止的全文) */
   | { type: 'text'; text: string }
+  | { type: 'reasoning'; round: number; text: string }
   /** 一步开始 / 做完(每次给一份新的拷贝) */
   | { type: 'step'; step: AgentStep }
   | { type: 'step-done'; step: AgentStep };
@@ -123,7 +124,7 @@ export async function runAgent(req: AgentRequest): Promise<AgentOutcome> {
         temperature: req.temperature,
         maxTokens: req.maxTokens,
       },
-      { signal: req.signal, onDelta: (_, full) => emit({ type: 'text', text: full }) },
+      { signal: req.signal, onDelta: (_, full) => emit({ type: 'text', text: full }), onReasoningDelta: (_, full) => emit({ type: 'reasoning', round, text: full }) },
     );
     if (r.usage) {
       usage.inputTokens += r.usage.inputTokens;
@@ -134,7 +135,7 @@ export async function runAgent(req: AgentRequest): Promise<AgentOutcome> {
     if (!calls.length || last) {
       // 一步没做、一句没说:算空回复(做过步骤再收尾不说话可以,结果已经摆在面板上)
       if (!steps.length && !r.text.trim()) throw new AiError('bad-response', 'AI 返回了空回复,请再试一次');
-      msgs.push({ role: 'assistant', content: r.text });
+      msgs.push({ role: 'assistant', content: r.text, ...(r.reasoning !== undefined ? { reasoning: r.reasoning } : {}) });
       return { text: r.text.trim(), steps, messages: msgs, end: calls.length ? 'rounds' : 'done', rounds: round + 1, usage };
     }
     // 调用编号重复(或者空)就换成不重的:每条工具结果要对上各自那次调用
@@ -145,7 +146,7 @@ export async function runAgent(req: AgentRequest): Promise<AgentOutcome> {
       used.add(id);
       return id === c.id ? c : { ...c, id };
     });
-    msgs.push({ role: 'assistant', content: r.text, toolCalls: fixed });
+    msgs.push({ role: 'assistant', content: r.text, toolCalls: fixed, ...(r.reasoning !== undefined ? { reasoning: r.reasoning } : {}) });
     for (const c of fixed) {
       if (req.signal?.aborted) throw aborted();
       const tool = byName.get(c.name);

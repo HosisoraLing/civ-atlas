@@ -7,6 +7,7 @@ import { getAiSettings } from './settings';
 import { getSession } from '../account/session';
 import { deepseekProvider } from './providers/deepseek';
 import { bailianProvider } from './providers/bailian';
+import { customProvider } from './providers/custom';
 import { officialProvider, officialServer, refreshOfficialAccount } from './providers/official';
 
 let done = false;
@@ -23,6 +24,7 @@ export function setupAi(): void {
   registerProvider(officialProvider);
   registerProvider(deepseekProvider);
   registerProvider(bailianProvider);
+  registerProvider(customProvider);
   const saved = getAiSettings().provider;
   setActiveProvider(saved === 'mock' && !mockSelectable() ? null : saved);
   void initCallLog();

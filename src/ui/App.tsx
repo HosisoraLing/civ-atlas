@@ -2,6 +2,7 @@ import './theme.css';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { DEFAULT_PARAMS, type World, type WorldParams } from '../gen/world';
+import { PLATE_COUNT_KEYS, plateCounts } from '../gen/tectonics';
 import type { Raster } from '../gen/raster';
 import { renderRealistic } from '../render/realistic';
 import { renderFantasy } from '../render/fantasy';
@@ -242,6 +243,10 @@ function readUrl() {
     const v = q.get(k);
     if (v !== null && !Number.isNaN(Number(v))) params[k] = Number(v);
   }
+  if (PLATE_COUNT_KEYS.some(k => q.has(k))) {
+    for (const k of PLATE_COUNT_KEYS) if (q.has(k)) params[k] = Number(q.get(k));
+    Object.assign(params, plateCounts(params));
+  }
   // 画风 / 数据图层:旧链接的 style=、layer= 照旧;没有 style= 时 layer= 是新的图层名(政区、民族……,见 mapLayers.ts)
   const qs = q.get('style');
   const ql = q.get('layer');
@@ -331,7 +336,7 @@ function draftSig(params: WorldParams, edits: WorldEdits, title?: string): strin
 
 /** 一个新建中的世界(还没动过) */
 function draftTarget(params: WorldParams, base: DraftBase | null = null, edits: WorldEdits = EMPTY_EDITS, title?: string): Target {
-  return { id: newWorldId(), kind: 'draft', params, edits, pristine: true, base, title };
+  return { id: newWorldId(), kind: 'draft', params: base ? params : { ...params, ...plateCounts(params) }, edits, pristine: true, base, title };
 }
 
 /** 存着的一个世界(刷新页面回到它时投影照网址,不换) */
@@ -397,6 +402,9 @@ function writeWorldUrl(t: Target) {
     if (k === 'seed' || t.params[k] !== DEFAULT_PARAMS[k]) q.set(k, String(t.params[k]));
     else q.delete(k);
   }
+  for (const k of PLATE_COUNT_KEYS) {
+    if (t.params[k] === undefined) q.delete(k); else q.set(k, String(t.params[k]));
+  }
   q.delete('w');
   q.delete('new');
   q.delete('s');
@@ -418,7 +426,7 @@ function writeWorldUrl(t: Target) {
 /** 回到"我的世界":网址里去掉这个世界(种子、参数、编号、年份……),留着图层、投影这些看法 */
 function writeHomeUrl() {
   const q = new URLSearchParams(location.search);
-  for (const k of [...Object.keys(DEFAULT_PARAMS), 'w', 'new', 's', GEN_KEY, 'civYear', 'play', 'chron']) q.delete(k);
+  for (const k of [...Object.keys(DEFAULT_PARAMS), ...PLATE_COUNT_KEYS, 'w', 'new', 's', GEN_KEY, 'civYear', 'play', 'chron']) q.delete(k);
   const rest = q.toString();
   history.replaceState(null, '', rest ? `?${rest}` : location.pathname);
 }
@@ -1511,8 +1519,10 @@ export function App() {
     // 没画草图 = 整颗星球都换了,放的那几处是照原来的地形放的,不带过去。助手的对话(说的是原来那颗)也清掉
     newConversation();
     const sketch = st.edits.sketch;
-    const plain = !st.title && !sketch && worldKey({ ...t.params, seed: 0 }) === worldKey({ ...DEFAULT_PARAMS, seed: 0 });
-    const edits = sketch ? { ...EMPTY_EDITS, sketch, terrain: st.edits.terrain } : EMPTY_EDITS;
+    const standard = t.params.largePlates !== undefined || t.params.smallPlates !== undefined ? { ...DEFAULT_PARAMS, ...plateCounts(DEFAULT_PARAMS) } : DEFAULT_PARAMS;
+    const plain = !st.title && !sketch && worldKey({ ...t.params, seed: 0 }) === worldKey({ ...standard, seed: 0 });
+    const terrainEdits = sketch ? { ...EMPTY_EDITS, sketch, terrain: st.edits.terrain } : EMPTY_EDITS;
+    const edits = terrainEdits;
     generate({ ...t, params: { ...t.params, seed }, edits, saved: undefined, title: st.title, pristine: st.pristine || plain, view: undefined, from: undefined, save: undefined });
   };
   /** 新建中调参数:改过的地形留着(按新参数重新生成) */

@@ -80,7 +80,8 @@ function paramsText(p: WorldParams): string | undefined {
   const d = DEFAULT_PARAMS;
   const out: string[] = [];
   if (p.landFraction !== d.landFraction) out.push(`陆地比例 ${Math.round(p.landFraction * 100)}%`);
-  if (p.plates !== d.plates) out.push(`板块数量 ${p.plates}`);
+  if (p.largePlates !== undefined || p.smallPlates !== undefined) out.push(`大型板块 ${p.largePlates}、小型板块 ${p.smallPlates}（共 ${p.plates}）`);
+  else if (p.plates !== d.plates) out.push(`板块数量 ${p.plates}`);
   if (p.mountains !== d.mountains) out.push(`造山强度 ${p.mountains.toFixed(2)}×`);
   if (p.temperature !== d.temperature) out.push(`气温 ${p.temperature > 0 ? '+' : ''}${p.temperature}°C`);
   if (p.rainfall !== d.rainfall) out.push(`降水 ${p.rainfall.toFixed(2)}×`);

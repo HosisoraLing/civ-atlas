@@ -1,3 +1,4 @@
+import { dataStorage, storageEventKey, wikiMode } from "../account/wikiStorage";
 /**
  * 存档的浏览器存储:"我的世界"。
  *
@@ -56,11 +57,12 @@ const PREFIX = 'wenming-ditu:world:';
 const THUMB = 'wenming-ditu:thumb:';
 const META = 'wenming-ditu:meta:';
 /** AI 写的东西(ai/library.ts)按世界编号存的键 */
+const ASSISTANT = 'wenming-ditu:assistant:';
 const NOTES = 'civ-atlas:ai-notes:';
 /** 以前按"种子 + 参数"当编号存的世界换成了哪个新编号(旧网址只带种子、参数,刷新还回到它) */
 const LEGACY = 'wenming-ditu:legacy:';
 /** 最多存多少个世界(每个几 KB + 缩略图三十来 KB) */
-export const MAX_WORLDS = 60;
+export const MAX_WORLDS = wikiMode() ? 10_000 : 60;
 /** 缩略图的大小("我的世界"里一张卡片宽 480) */
 export const THUMB_W = 480;
 export const THUMB_H = 240;
@@ -91,7 +93,7 @@ function isQuota(e: unknown): boolean {
 
 function openLocal(): Storage | null {
   try {
-    const s = (globalThis as { localStorage?: Storage }).localStorage;
+    const s = dataStorage();
     if (!s) return null;
     const probe = 'wenming-ditu:probe';
     s.setItem(probe, '1');
@@ -245,7 +247,7 @@ function changed() {
 }
 // 别的标签页存了、删了世界(同步取回来的也算):这里跟着刷新"我的世界",云同步也看一眼
 if (typeof window !== 'undefined') {
-  window.addEventListener('storage', (e) => otherTabChanged(e.key, e.newValue));
+  window.addEventListener('storage', (e) => { const k = storageEventKey(e.key); if (k !== undefined) otherTabChanged(k, e.newValue); });
 }
 
 /** 别的页面里改过正在看的世界,点"载入"重新打开它(App 给) */
@@ -256,7 +258,7 @@ export function setReopenHandler(f: ((id: string) => void) | null) {
 
 /** 别的标签页改了浏览器存储(storage 事件;单测直接调):key = null 是整个清空 */
 export function otherTabChanged(key: string | null, newValue: string | null): void {
-  if (key !== null && ![PREFIX, THUMB, META, NOTES, LEGACY].some((p) => key.startsWith(p))) return;
+  if (key !== null && ![PREFIX, THUMB, META, NOTES, LEGACY, ASSISTANT].some((p) => key.startsWith(p))) return;
   const c = current;
   // 整个清空:存过的当前世界也没了
   const cleared = key === null && !!c && (c.kind === 'created' || (c.kind === 'draft' && !c.pristine)) && store().get(PREFIX + c.id) === null;
@@ -519,7 +521,7 @@ const nameOf = (id: string) => {
 
 function removeKeys(id: string) {
   const kv = store();
-  for (const p of [PREFIX, THUMB, META, NOTES]) kv.remove(p + id);
+  for (const p of [PREFIX, THUMB, META, NOTES, ASSISTANT]) kv.remove(p + id);
 }
 
 /** 删掉最旧的一个世界(不删 keep;读不出来的坏条目、没有存档的缩略图最先删);没得删 = false */
@@ -632,7 +634,7 @@ export function setDeleteHook(f: ((id: string) => void) | null) {
 export function deleteWorld(id: string): DeletedWorld | null {
   const kv = store();
   const keys: [string, string][] = [];
-  for (const p of [PREFIX, THUMB, META, NOTES]) {
+  for (const p of [PREFIX, THUMB, META, NOTES, ASSISTANT]) {
     const v = kv.get(p + id);
     if (v !== null) keys.push([p + id, v]);
   }
@@ -1084,6 +1086,7 @@ export interface RawWorld {
   save: string;
   meta: SyncMeta;
   thumb: string | null;
+  assistant?: unknown;
 }
 
 /** 浏览器里存着的世界编号(老编号"种子 + 参数"的不算:服务器只认新编号) */
@@ -1126,7 +1129,9 @@ export function rawWorld(id: string): RawWorld | null {
   const kv = store();
   const save = kv.get(PREFIX + id);
   if (!save || !parseSave(save).ok) return null;
-  return { save, meta: syncMetaOf(readMeta(id)), thumb: kv.get(THUMB + id) };
+  let assistant: unknown = null;
+  try { assistant = JSON.parse(kv.get(ASSISTANT + id) ?? 'null'); } catch { /* Bad chat does not destroy a valid save. */ }
+  return { save, meta: syncMetaOf(readMeta(id)), thumb: kv.get(THUMB + id), ...(wikiMode() ? { assistant } : {}) };
 }
 
 /**
@@ -1138,6 +1143,7 @@ export function putSyncedWorld(id: string, w: RawWorld, opened0?: string): boole
   if (!ID_RE.test(id) || !parseSave(w.save).ok) return false;
   const kv = store();
   const old = kv.get(PREFIX + id);
+  const oldMeta = kv.get(META + id);
   const opened = readMeta(id).opened ?? opened0;
   if (!kv.set(PREFIX + id, w.save)) return false;
   const m: Meta = { ...w.meta };
@@ -1146,6 +1152,14 @@ export function putSyncedWorld(id: string, w: RawWorld, opened0?: string): boole
     if (old === null) kv.remove(PREFIX + id);
     else kv.set(PREFIX + id, old);
     return false;
+  }
+  if (w.assistant !== undefined) {
+    if (w.assistant === null) kv.remove(ASSISTANT + id);
+    else if (!kv.set(ASSISTANT + id, JSON.stringify(w.assistant))) {
+      if (old === null) kv.remove(PREFIX + id); else kv.set(PREFIX + id, old);
+      if (oldMeta === null) kv.remove(META + id); else kv.set(META + id, oldMeta);
+      return false;
+    }
   }
   // 缩略图写不下就先不要(打开时再截一张)
   if (!w.thumb || !kv.set(THUMB + id, w.thumb)) kv.remove(THUMB + id);
@@ -1208,7 +1222,7 @@ export function removeSyncedWorld(id: string) {
  * 正在看的世界接着用
  */
 export function removeAllWorlds(): boolean {
-  const ours = (k: string) => [PREFIX, THUMB, META, NOTES, LEGACY].some((p) => k.startsWith(p));
+  const ours = (k: string) => [PREFIX, THUMB, META, NOTES, LEGACY, ASSISTANT].some((p) => k.startsWith(p));
   if (!wipeBrowser(ours)) {
     // 正在看的那份没能放回去:马上再存一次
     if (current?.wrote != null && store().get(PREFIX + current.id) === null) saveCurrent(true);
@@ -1230,7 +1244,7 @@ export function removeAllWorlds(): boolean {
 function wipeBrowser(ours: (k: string) => boolean): boolean {
   let s: Storage | undefined;
   try {
-    s = (globalThis as { localStorage?: Storage }).localStorage;
+    s = dataStorage();
   } catch {
     return false;
   }
@@ -1294,3 +1308,6 @@ export function _resetForTest() {
   mem.clear();
   stopThumb();
 }
+
+/** Related per-world data changed (assistant conversation). */
+export function worldDataChanged(id: string): void { keepWorld(id); changed(); }

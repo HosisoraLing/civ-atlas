@@ -46,6 +46,7 @@
  * 纯计算,不碰 DOM(Node 里可测)。
  */
 import { DEFAULT_PARAMS, type World, type WorldParams } from './world';
+import { plateCounts, PLATE_COUNT_KEYS } from './tectonics';
 import { GENERATOR_CHANGES, GENERATOR_VERSION, MARKS_MAX, MARK_REGIONS_TOTAL, NAME_MAX, aiNameKeys, cleanMark, freeMarkId, type AiNameMark, type AuthorMark, type GeneratorChange, type Intervention, type TerrainOp, type Upheaval, type WorldEdits } from './edits';
 import { TERRAIN_MAX_OPS, UPHEAVALS_MAX, UPHEAVAL_KINDS, UPHEAVAL_OPS_MAX, cleanTerrainOp, cleanUpheaval } from './terrainEdits';
 import { SKETCH_MAX_STROKES, cleanSketch, cleanSketchStroke, type SketchEdit } from './sketch';
@@ -244,6 +245,8 @@ const PARAM_RANGE: Record<keyof WorldParams, [number, number]> = {
   cells: [2000, 200000],
   landFraction: [0.02, 0.95],
   plates: [2, 64],
+  largePlates: [2, 32],
+  smallPlates: [0, 32],
   mountains: [0, 5],
   temperature: [-40, 40],
   rainfall: [0, 5],
@@ -254,16 +257,20 @@ const PARAM_NAME: Record<keyof WorldParams, string> = {
   cells: '精细度',
   landFraction: '陆地比例',
   plates: '板块数量',
+  largePlates: '大型板块数量',
+  smallPlates: '小型板块数量',
   mountains: '造山强度',
   temperature: '气温',
   rainfall: '降水',
 };
 
-const PARAM_KEYS = Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[];
+const PARAM_KEYS = Object.keys(DEFAULT_PARAMS) as Exclude<keyof WorldParams, 'largePlates' | 'smallPlates'>[];
 
 /** 一个世界的身份(种子 + 全部参数,固定顺序):浏览器里按它存、按它找 */
 export function worldKey(params: WorldParams): string {
-  return PARAM_KEYS.map((k) => `${k}=${params[k] ?? DEFAULT_PARAMS[k]}`).join('&');
+  const split = params.largePlates !== undefined || params.smallPlates !== undefined ? plateCounts(params) : null;
+  const p = split ? { ...params, ...split } : params;
+  return PARAM_KEYS.map((k) => `${k}=${p[k] ?? DEFAULT_PARAMS[k]}`).join('&') + (split ? `&largePlates=${split.largePlates}&smallPlates=${split.smallPlates}` : '');
 }
 
 /** 改了几处:改名条数 + 干预条数 + 地形修改处数 + 草图(画了算一处)+ 地形大事件数 + 作者标记个数 + 改过的旗面数 + 作者的人物个数 */
@@ -301,6 +308,7 @@ export function makeSave(
 ): SaveFile {
   const p = {} as WorldParams;
   for (const k of PARAM_KEYS) p[k] = params[k] ?? DEFAULT_PARAMS[k];
+  if (params.largePlates !== undefined || params.smallPlates !== undefined) Object.assign(p, plateCounts(params));
   const save: SaveFile = {
     app: SAVE_APP,
     format: SAVE_FORMAT,
@@ -405,6 +413,17 @@ export function parseSave(text: string): ParseResult {
     const [lo, hi] = PARAM_RANGE[k];
     if (v < lo || v > hi) bad.push(PARAM_NAME[k]);
     params[k] = Math.min(hi, Math.max(lo, v));
+  }
+  if (PLATE_COUNT_KEYS.some(k => P[k] !== undefined)) {
+    for (const k of PLATE_COUNT_KEYS) {
+      const v = P[k];
+      if (v === undefined) continue;
+      const [lo, hi] = PARAM_RANGE[k];
+      if (typeof v !== 'number' || !Number.isFinite(v)) { bad.push(PARAM_NAME[k]); continue; }
+      if (!Number.isInteger(v) || v < lo || v > hi) bad.push(PARAM_NAME[k]);
+      params[k] = v;
+    }
+    Object.assign(params, plateCounts(params));
   }
   if (bad.length) warnings.push(`存档里的${bad.join('、')}不对,已改成合理的值`);
 

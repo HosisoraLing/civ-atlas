@@ -115,7 +115,7 @@ export function getAiStatus(): AiStatus {
 
 /** 没选 AI 时的说明:我们的 AI 开放了才提它 */
 function unsetReason(): string {
-  const own = '填上自己的 DeepSeek / 阿里云百炼密钥';
+  const own = '填上自己的 DeepSeek / 阿里云百炼密钥，或配置自定义服务';
   return providers.get('official')?.offered?.() ? `还没有设置 AI:可以用我们提供的 AI(消耗积分),或${own}` : `还没有设置 AI:可以${own}`;
 }
 
@@ -193,6 +193,7 @@ export async function aiChat(req: AiRequest, opts: AiCallOptions = {}): Promise<
     title: req.title,
     messages: req.messages.map((m) => ({ ...m, content: clip(m.content) })),
     world: worldOf(),
+    ...(p?.kind === 'custom' ? { providerLabel: p.label } : {}),
   };
   if (aiOff) {
     const err = new AiError('not-configured', 'AI 功能已关(AI 设置里可以打开)');
@@ -212,8 +213,17 @@ export async function aiChat(req: AiRequest, opts: AiCallOptions = {}): Promise<
   }
   // 记下已经收到的部分:停止 / 中途断线时也写进记录(这部分服务商照样计费,用户能看到写到了哪)
   let partial = '';
+  let partialReasoning = '';
   const tracked: AiCallOptions = {
     ...opts,
+    onRequestMessages: (messages) => {
+      base.messages = messages.map(m => ({ ...m, content: clip(m.content), ...(m.reasoning ? { reasoning: clip(m.reasoning) } : {}) }));
+      opts.onRequestMessages?.(messages);
+    },
+    onReasoningDelta: (chunk, full) => {
+      partialReasoning = full;
+      opts.onReasoningDelta?.(chunk, full);
+    },
     onDelta: (chunk, full) => {
       partial = full;
       opts.onDelta?.(chunk, full);
@@ -231,6 +241,7 @@ export async function aiChat(req: AiRequest, opts: AiCallOptions = {}): Promise<
       credits: r.credits,
       ms: res.ms,
       text: clip(r.text),
+      ...(r.reasoning ? { reasoning: clip(r.reasoning) } : {}),
       ...(r.toolCalls?.length ? { toolCalls: r.toolCalls.map((c) => ({ ...c, args: clip(c.args) })) } : {}),
     });
     return res;
@@ -249,6 +260,7 @@ export async function aiChat(req: AiRequest, opts: AiCallOptions = {}): Promise<
       error: { code: err.code, message: err.message },
       ms: Math.round(now()),
       ...(partial ? { text: clip(partial) } : {}),
+      ...(partialReasoning ? { reasoning: clip(partialReasoning) } : {}),
     });
     throw err;
   }

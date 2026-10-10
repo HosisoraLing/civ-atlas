@@ -670,3 +670,13 @@
   padding: 0 12px;
   font-weight: 500;
 }
+
+/* Custom service selectors, fields and actions share one control size. */
+.ai-detail[data-detail="custom"] .ai-input,
+.ai-detail[data-detail="custom"] .ai-mini,
+.ai-detail[data-detail="custom"] .ai-test-btn { height: 36px; box-sizing: border-box; }
+.ai-detail[data-detail="custom"] .ai-mini { flex: none; white-space: nowrap; }
+
+.ai-reasoning, .ast-reasoning { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); }
+.ai-reasoning summary, .ast-reasoning summary { cursor: pointer; font-size: 13px; }
+.ai-reasoning pre, .ast-reasoning pre { margin: 8px 0 0; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; }

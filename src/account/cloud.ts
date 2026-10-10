@@ -35,6 +35,7 @@ export interface CloudWorld {
   meta: Record<string, unknown> | null;
   thumb: string | null;
   notes: AiNote[] | null;
+  assistant?: unknown;
 }
 
 export interface PutBody {
@@ -43,6 +44,7 @@ export interface PutBody {
   meta?: Record<string, unknown> | null;
   thumb?: string | null;
   notes?: AiNote[] | null;
+  assistant?: unknown;
   revive?: boolean;
 }
 

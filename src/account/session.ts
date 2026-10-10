@@ -1,3 +1,4 @@
+import { wikiMode } from "./wikiStorage";
 /**
  * 网站账号:登录(邮箱收验证码,邀请制)、退出、注销。世界的云同步(sync.ts)、分享短链接(cloud.ts)、我们的 AI(ai/providers/official.ts)
  * 都用这一个账号。
@@ -67,6 +68,7 @@ function emit() {
 
 /** 写进浏览器存储;返回写进去没有(存不下、隐私模式 = false,只留在内存里) */
 function persist(s: Session | null): boolean {
+  if (wikiMode()) return true;
   try {
     const st = storage();
     if (!st) return false;
@@ -89,6 +91,7 @@ function write(s: Session | null) {
 
 function load(): Session | null {
   if (session !== undefined) return session;
+  if (wikiMode()) return null;
   let s: Session | null = null;
   try {
     const raw = storage()?.getItem(KEY);
@@ -141,6 +144,7 @@ export function useSession(): Session | null {
 
 /** 别的标签页登录、退出、换了账号:按浏览器里存着的重读,变了就通知(还没读过的不用管,用到时自然读新的) */
 export function refreshSession(): void {
+  if (wikiMode()) { void refreshWikiSession().catch(() => {}); return; }
   if (session === undefined) return;
   const st = storage();
   if (!st) return;
@@ -329,7 +333,37 @@ export function updateUser(u: { id?: unknown; account?: unknown; name?: unknown 
 /** 单测用:忘掉内存里的,下次从存储重读 */
 export function _resetSessionForTest(): void {
   session = undefined;
+  wikiUser = undefined;
   options = null;
   invite = null;
   emit();
+}
+
+let wikiRefresh: Promise<Session | null> | null = null;
+let wikiUser: string | undefined;
+/** Wiki's HttpOnly cookie is the only credential; no second login or browser token. */
+export function refreshWikiSession(): Promise<Session | null> {
+  if (wikiRefresh) return wikiRefresh;
+  wikiRefresh = (async () => {
+    try {
+      const r = await call<{ user: AccountUser }>('/v1/me');
+      const next = { token: `wiki:${r.user.id}`, user: r.user };
+      if (wikiUser && wikiUser !== next.user.id) {
+        write(null);
+        location.reload();
+        return null;
+      }
+      wikiUser = next.user.id;
+      if (!session || JSON.stringify(session.user) !== JSON.stringify(next.user)) {
+        // Storage must be prepared by bootstrap before the application starts syncing.
+        session = next;
+        emit();
+      }
+      return next;
+    } catch (e) {
+      if (e instanceof ServerError && e.status === 401 && session) write(null);
+      throw e;
+    }
+  })().finally(() => { wikiRefresh = null; });
+  return wikiRefresh;
 }

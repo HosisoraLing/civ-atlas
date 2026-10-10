@@ -1,3 +1,4 @@
+import { wikiMode } from "../../account/wikiStorage";
 /**
  * 我们提供的 AI(按次扣积分)—— 客户端。服务器是另一个独立程序,不在本仓库里;下面是客户端依赖的接口要点,客户端照这份约定实现。
  * 登录用的是网站账号(account/session.ts,和云同步、分享短链接同一个账号);这里只管积分和调 AI。
@@ -55,7 +56,7 @@ import { ToolCallAcc, wireMessage } from './compat';
 
 /** 我们的服务器地址;null = 未开放 */
 export function officialServer(): string | null {
-  return serverBase();
+  return wikiMode() ? null : serverBase();
 }
 
 /** 单测用:指定服务器地址(null = 未开放;undefined = 恢复按构建变量) */

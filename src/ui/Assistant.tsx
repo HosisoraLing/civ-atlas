@@ -273,6 +273,10 @@ function Turn({ t, latest, phone, busy, civ, links, previewing }: TurnProps) {
   return (
     <div className="ast-turn" data-turn={t.id}>
       <div className="ast-me">{t.ask}</div>
+      {t.reasoning?.map(r => <details className="ast-reasoning" key={r.round} open={t.status === 'working'}>
+        <summary>思考过程 · 第 {r.round + 1} 轮</summary>
+        <pre>{r.text}</pre>
+      </details>)}
       <Steps t={t} />
       {/* 问答的回话里国名、城名是蓝字;交确认单的那一轮下面有结果对比,不再标 */}
       {!!t.text && <Say text={t.text} links={done && !t.proposal ? links : null} phone={phone} />}

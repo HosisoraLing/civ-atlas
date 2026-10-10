@@ -466,11 +466,11 @@ describe('助手', () => {
     expect(REWRITE_SYSTEM).toContain(REWRITE_OPS);
     expect(ASSISTANT_SYSTEM).toContain(REWRITE_OPS);
     const m = assistantMessages(ctx(), [{ ask: '让它多撑三百年', reply: '好的', items: ['某国:保护'], applied: true }, { ask: '大昌在哪' }], '再让它结个盟');
-    expect(m).toHaveLength(2);
-    const u = m[1].content;
-    expect(u).toContain('# 之前的对话');
-    expect(u).toContain('作者:让它多撑三百年\n你:好的(列的修改:某国:保护—— 作者执行了)');
-    expect(u).toContain('作者:大昌在哪');
+    expect(m).toHaveLength(6);
+    const u = m.map(m => m.content).join('\n');
+    expect(m[1]).toEqual({ role: 'user', content: '让它多撑三百年' });
+    expect(m[2]).toEqual({ role: 'assistant', content: '好的(列的修改:某国:保护—— 作者执行了)' });
+    expect(m[3]).toEqual({ role: 'user', content: '大昌在哪' });
     expect(u.endsWith('# 作者这次说\n再让它结个盟')).toBe(true);
   });
 

@@ -8,6 +8,6 @@
  * 两个说明页是 public/ 里的静态网页,和地图放在同一个目录下,所以用相对地址(网站放在子目录里也能打开)。
  * 仓库地址改了的话,public/privacy.html、public/terms.html 里写死的仓库地址要一起改(冒烟检查会比对)。
  */
-export const SOURCE_URL = 'https://github.com/guaner-334/civ-atlas';
+export const SOURCE_URL = 'https://github.com/HosisoraLing/civ-atlas';
 export const PRIVACY_URL = './privacy.html';
 export const TERMS_URL = './terms.html';

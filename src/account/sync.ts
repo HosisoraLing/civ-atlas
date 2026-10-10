@@ -1,3 +1,4 @@
+import { acknowledgeMigration, dataStorage, wikiMode } from "./wikiStorage";
 /**
  * 云同步:登录了网站账号,"我的世界"里的世界(存档、几项本地信息、缩略图、AI 写的东西)自动存进账号,
  * 换电脑、换手机登录同一个账号就能接着改。服务器只管"版本号对上才存"(cloud.ts),怎么合并在这里定:
@@ -84,8 +85,8 @@ let dirty = false;
 /** 浏览器里存着的记录(key 默认是现在这份;undefined = 浏览器存储用不了) */
 function storedState(key = KEY): SyncState | null | undefined {
   try {
-    if (typeof localStorage === 'undefined') return undefined;
-    const raw = localStorage.getItem(key);
+    if (!dataStorage()) return undefined;
+    const raw = dataStorage()!.getItem(key);
     if (!raw) return null;
     const v = JSON.parse(raw) as SyncState;
     return v && typeof v.user === 'string' && v.worlds && typeof v.worlds === 'object' && v.deletes && typeof v.deletes === 'object' ? v : null;
@@ -141,7 +142,7 @@ function writeState(st: SyncState | null) {
     memState = null;
     dirty = false;
     try {
-      if (typeof localStorage !== 'undefined') localStorage.removeItem(KEY);
+      dataStorage()?.removeItem(KEY);
     } catch {
       /* 隐私模式 */
     }
@@ -169,8 +170,8 @@ function writeState(st: SyncState | null) {
   }
   if (key === KEY) memState = st;
   try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(key, JSON.stringify(st));
+    if (!dataStorage()) return;
+    dataStorage()!.setItem(key, JSON.stringify(st));
     bases.set(st, copyState(st));
     if (key === KEY) dirty = false;
   } catch {
@@ -223,8 +224,10 @@ function canonSave(text: string): string {
 
 const notesText = (n: AiNote[] | null | undefined) => (n && n.length ? canon(n) : '');
 
+const rawAssistant = (w: RawWorld) => wikiMode() ? [canon(w.assistant ?? null)] : [];
+
 function sumOf(w: RawWorld, notes: AiNote[] | null | undefined): string {
-  return cyrb53([canonSave(w.save), canon(w.meta), w.thumb ?? '', notesText(notes)].join('\u0000'));
+  return cyrb53([canonSave(w.save), canon(w.meta), w.thumb ?? '', notesText(notes), ...(rawAssistant(w))].join('\u0000'));
 }
 
 /** 不算缩略图的指纹:两边做了同样的改动,不同的浏览器画出来的图也可能差一点点;打开世界时缩略图也会重画 */
@@ -261,7 +264,7 @@ function syncOrder(): string[] {
 
 /** 服务器上那份 → 写进浏览器的样子(和本地的指纹一样算法) */
 function remoteRaw(w: CloudWorld, save: unknown = w.save): RawWorld {
-  return { save: JSON.stringify(save), meta: cleanSyncMeta(w.meta), thumb: typeof w.thumb === 'string' && w.thumb ? w.thumb : null };
+  return { save: JSON.stringify(save), meta: cleanSyncMeta(w.meta), thumb: typeof w.thumb === 'string' && w.thumb ? w.thumb : null, ...(wikiMode() ? { assistant: w.assistant ?? null } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +419,7 @@ async function upload(st: SyncState, id: string, l: Local, baseRev: number, revi
   if (l.notes.length && JSON.stringify(l.notes).length > NOTES_MAX) {
     throw new ServerError(400, 'bad-request', 'AI 给这个世界写的东西太多了，存不进账号');
   }
-  const body: PutBody = { baseRev, save: JSON.parse(l.raw.save), meta: { ...l.raw.meta }, thumb: thumbOf(l.raw.thumb), notes: l.notes.length ? l.notes : null };
+  const body: PutBody = { baseRev, save: JSON.parse(l.raw.save), meta: { ...l.raw.meta }, thumb: thumbOf(l.raw.thumb), notes: l.notes.length ? l.notes : null, ...(wikiMode() ? { assistant: l.raw.assistant ?? null } : {}) };
   if (revive) body.revive = true;
   uploading.add(id);
   deletedWhileUp.delete(id);
@@ -445,6 +448,7 @@ async function upload(st: SyncState, id: string, l: Local, baseRev: number, revi
   // 存上去的工夫为了腾地方被挤出浏览器的也算存好了:账号里的那份留着,有地方了再取回来
   st.worlds[id] = { rev: r.rev, sum: l.sum, core: l.core, at: nowIso() };
   behind.delete(id);
+  acknowledgeMigration(id, l.raw.save, l.raw.assistant, l.notes);
 }
 
 /** 存上去;版本号对不上就按"全看一遍"的规矩合并 */
@@ -707,7 +711,7 @@ async function reconcile(st: SyncState, id: string, s: CloudEntry | null, depth 
 function stash(st: SyncState): boolean {
   try {
     if (typeof localStorage === 'undefined') return true;
-    localStorage.setItem(STASH + st.user, JSON.stringify(st));
+    dataStorage()!.setItem(STASH + st.user, JSON.stringify(st));
     return true;
   } catch {
     return false;
@@ -716,7 +720,7 @@ function stash(st: SyncState): boolean {
 function unstash(user: string): SyncState | null {
   try {
     if (typeof localStorage === 'undefined') return null;
-    const raw = localStorage.getItem(STASH + user);
+    const raw = dataStorage()!.getItem(STASH + user);
     if (!raw) return null;
     localStorage.removeItem(STASH + user);
     const v = JSON.parse(raw) as SyncState;
@@ -1016,7 +1020,7 @@ function stateForDelete(): { st: SyncState; save: () => void } | null {
     st: v,
     save: () => {
       try {
-        localStorage.setItem(key, JSON.stringify(v));
+        dataStorage()!.setItem(key, JSON.stringify(v));
       } catch {
         /* 存不下:算了 */
       }

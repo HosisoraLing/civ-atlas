@@ -5032,7 +5032,10 @@ for (const style of ['realistic', 'fantasy']) {
         if (!onDisk) errs.push(`链接:构建产物里没有 ${f}`);
         if (r.status() !== 200 || !body.includes(`<h1>${h1}</h1>`)) errs.push(`链接:构建后的 ${f} 打不开(${r.status()})`);
         const repos = [...body.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+/g)].map((m) => m[0]);
-        if (!repos.length || repos.some((u) => u !== SOURCE_URL)) errs.push(`链接:${f} 里的仓库网址和 links.ts 不一致(${[...new Set(repos)]})`);
+        const sourceMatches = SOURCE_URL.startsWith('http')
+          ? repos.length > 0 && repos.every((u) => u === SOURCE_URL)
+          : body.includes(`href="${SOURCE_URL}"`);
+        if (!sourceMatches) errs.push(`链接:${f} 里的源码地址和 links.ts 不一致`);
         if (!body.includes('href="./"')) errs.push(`链接:${f} 底部没有回到地图的链接`);
       }
     } finally {

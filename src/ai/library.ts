@@ -1,3 +1,4 @@
+import { dataStorage, storageEventKey } from "../account/wikiStorage";
 /**
  * AI 写出来的东西(史书、释名……)按世界存在本地浏览器里(阶段 5)。登录了网站账号的,跟着世界同步进账号(account/sync.ts)。
  * 世界 = saveStore 的世界编号(每个世界一个);浏览器存储不可用(隐私模式)时只在内存里。
@@ -37,7 +38,7 @@ const emit = () => {
 /** 浏览器里存着的原文;undefined = 浏览器存储用不了(隐私模式) */
 function stored(world: string): string | null | undefined {
   try {
-    return localStorage.getItem(PREFIX + world);
+    return dataStorage()!.getItem(PREFIX + world);
   } catch {
     return undefined;
   }
@@ -67,8 +68,8 @@ function write(world: string, list: AiNote[]): boolean {
   let ok = true;
   try {
     const raw = list.length ? JSON.stringify(list) : null;
-    if (raw) localStorage.setItem(PREFIX + world, raw);
-    else localStorage.removeItem(PREFIX + world);
+    if (raw) dataStorage()!.setItem(PREFIX + world, raw);
+    else dataStorage()!.removeItem(PREFIX + world);
     seen.set(world, raw);
   } catch {
     /* 存不下 / 隐私模式:只留在内存里(浏览器里还是原来那份,别的标签页没改它就一直用内存里的) */
@@ -82,7 +83,8 @@ function write(world: string, list: AiNote[]): boolean {
 // 别的标签页写了、删了笔记:这里跟着重画(重读时按原文对上没有)
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
-    if (e.key === null || e.key.startsWith(PREFIX)) emit();
+    const k = storageEventKey(e.key);
+    if (k === null || k?.startsWith(PREFIX)) emit();
   });
 }
 
@@ -117,7 +119,7 @@ export function copyNotes(from: string, to: string): boolean {
   if (!stored(from)) return true;
   try {
     const raw = JSON.stringify(list);
-    localStorage.setItem(PREFIX + to, raw);
+    dataStorage()!.setItem(PREFIX + to, raw);
     seen.set(to, raw);
     return true;
   } catch {

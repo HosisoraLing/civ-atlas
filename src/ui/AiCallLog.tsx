@@ -11,6 +11,7 @@ const PROVIDER_NAME: Record<AiProviderKind | 'none', string> = {
   official: '我们的 AI',
   deepseek: 'DeepSeek',
   bailian: '阿里云百炼',
+  custom: '自定义服务',
   mock: '测试用假 AI',
 };
 
@@ -106,7 +107,7 @@ export function AiCallLog() {
 
 function Row({ c, open, onToggle }: { c: AiCallRecord; open: boolean; onToggle: () => void }) {
   const meta = [
-    PROVIDER_NAME[c.provider] ?? c.provider,
+    c.providerLabel ?? PROVIDER_NAME[c.provider] ?? c.provider,
     c.model ? `模型 ${c.model}` : '',
     c.usage ? `${n(c.usage.inputTokens)} → ${n(c.usage.outputTokens)} tokens` : '',
     c.credits !== undefined ? `扣 ${c.credits} 积分` : '',
@@ -135,6 +136,7 @@ function Row({ c, open, onToggle }: { c: AiCallRecord; open: boolean; onToggle: 
               <pre>{[m.content, callsText(m.toolCalls)].filter(Boolean).join('\n')}</pre>
             </div>
           ))}
+          {c.reasoning && <details className="ai-reasoning"><summary>思考过程</summary><pre>{c.reasoning}</pre></details>}
           <h5>{c.ok ? '收到的全文' : '失败原因'}</h5>
           {c.ok ? (
             <pre className="ai-reply">{[c.text, callsText(c.toolCalls)].filter(Boolean).join('\n') || '(空)'}</pre>

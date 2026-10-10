@@ -1,3 +1,4 @@
+import { wikiMode } from "../account/wikiStorage";
 /**
  * 世界卡片头部的"存档"菜单:只管正在看的这一个世界(打开别的世界、从文件打开在"我的世界"那一页,见 MyWorlds.tsx) ——
  *
@@ -252,7 +253,7 @@ export function SaveMenu({ ready, icon }: SaveMenuProps) {
               <small>{session ? '留一份备份，或者发给别人' : '换台电脑、换个浏览器也能打开'}</small>
             </span>
           </button>
-          {session ? (
+          {session && !wikiMode() ? (
             <button className="save-it" data-act="share" disabled={!cur} onClick={share}>
               <Icon name="link" size={17} />
               <span>

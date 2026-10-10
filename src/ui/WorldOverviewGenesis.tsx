@@ -12,6 +12,7 @@ import { useEdits } from './editsStore';
 import { currentWorld, useSavesVersion } from './saveStore';
 import { Icon } from './icons';
 import { genSeconds } from './genSpeed';
+import { plateCounts } from '../gen/tectonics';
 
 interface Slider {
   key: keyof WorldParams;
@@ -27,7 +28,8 @@ interface Slider {
 
 export const SLIDERS: Slider[] = [
   { key: 'landFraction', name: '陆地比例', min: 0.12, max: 0.6, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%`, hint: '陆地占整个星球的比例' },
-  { key: 'plates', name: '板块数量', min: 8, max: 60, step: 1, fmt: (v) => `${v}`, hint: '板块越多,陆地越破碎、岛屿和山脉越多(板块有大有小)' },
+  { key: 'largePlates', name: '大型板块数量', min: 2, max: 32, step: 1, fmt: v => `${v}`, hint: '覆盖较大区域的主板块，大小仍有自然差异' },
+  { key: 'smallPlates', name: '小型板块数量', min: 0, max: 32, step: 1, fmt: v => `${v}`, hint: '生长较慢的次级板块；可设为 0' },
   { key: 'mountains', name: '造山强度', min: 0.2, max: 2, step: 0.05, fmt: (v) => `${v.toFixed(2)}×`, hint: '板块碰撞隆起的力度' },
   { key: 'temperature', name: '气温', min: -12, max: 12, step: 1, fmt: (v) => `${v > 0 ? '+' : ''}${v}°C`, hint: '整体偏冷(冰河期)还是偏暖' },
   { key: 'rainfall', name: '降水', min: 0.4, max: 1.8, step: 0.05, fmt: (v) => `${v.toFixed(2)}×`, hint: '整体偏干还是偏湿' },
@@ -46,9 +48,14 @@ export const SLIDERS: Slider[] = [
   },
 ];
 
+export function paramValue(p: WorldParams, key: keyof WorldParams): number {
+  return key === 'largePlates' || key === 'smallPlates' ? plateCounts(p)[key] : p[key]!;
+}
+
 /** 世界参数的一行简写(卡片里"世界参数"那一行右边) */
 export function paramsSide(p: WorldParams): string {
-  return `陆地 ${Math.round(p.landFraction * 100)}%，${p.plates} 个板块`;
+  const split = p.largePlates !== undefined || p.smallPlates !== undefined ? plateCounts(p) : null;
+  return `陆地 ${Math.round(p.landFraction * 100)}%，${split ? `大型 ${split.largePlates} / 小型 ${split.smallPlates}` : `${p.plates} 个板块`}`;
 }
 
 const KIND_NAME: Record<TerrainKind, string> = { volcano: '火山', range: '山脉', lake: '湖', raise: '抬起陆地', sink: '沉成海', river: '河' };
@@ -126,12 +133,13 @@ export function SettingsPage(p: SettingsProps) {
             <span>种子</span>
             <b>{params.seed}</b>
           </div>
-          {SLIDERS.map((s) => (
+          {SLIDERS.filter(s => params.largePlates !== undefined || params.smallPlates !== undefined || (s.key !== 'largePlates' && s.key !== 'smallPlates')).map((s) => (
             <div key={s.key} className="ov-kv-row" data-param={s.key}>
               <span>{s.name}</span>
-              <b>{s.fmt(params[s.key])}</b>
+              <b>{s.fmt(paramValue(params, s.key))}</b>
             </div>
           ))}
+          <div className="ov-kv-row" data-param="plates"><span>板块总数</span><b>{params.plates}{params.largePlates === undefined && params.smallPlates === undefined ? '（原版随机大小）' : ''}</b></div>
           <div className="ov-kv-row" data-param="terrain">
             <span>改过的地形</span>
             <b>{terrainBrief(edits.terrain, edits.sketch)}</b>

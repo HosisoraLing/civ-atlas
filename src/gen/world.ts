@@ -11,7 +11,7 @@
  * 没有地形修改、没有草图时结果逐字节不变。
  */
 import { buildMesh, type Mesh } from './mesh';
-import { buildTectonics, type Tectonics } from './tectonics';
+import { buildTectonics, plateCounts, type Tectonics } from './tectonics';
 import { erode, drainage, accumulate } from './erosion';
 import { computeClimate, type ClimateParams } from './climate';
 import { classifyBiome } from './biomes';
@@ -33,6 +33,9 @@ export interface WorldParams {
   landFraction: number;
   /** 板块一共几块(有大有小:几块巨大的 + 许多小的;越多陆地越碎、岛越多) */
   plates: number;
+  /** Optional explicit counts; older worlds keep the original random size distribution. */
+  largePlates?: number;
+  smallPlates?: number;
   mountains: number;
   temperature: number;
   rainfall: number;
@@ -108,6 +111,7 @@ export type Progress = (stage: string, pct: number) => void;
 /** terrain:作者的地形修改(WorldEdits.terrain,按先后;不给 / 空 = 不改);sketch:草图涂成的格子图(不给 / null = 没画) */
 export function generateWorld(params: WorldParams, progress: Progress = () => {}, terrain?: readonly TerrainOp[], sketch?: Sketch | null): World {
   const p = { ...DEFAULT_PARAMS, ...params };
+  if (p.largePlates !== undefined || p.smallPlates !== undefined) Object.assign(p, plateCounts(p));
   // 地形修改 + 地形大事(upheaval.ts 生成大事以后的世界时接在后面)
   const ops = cleanTerrainOps(terrain ?? [], TERRAIN_MAX_OPS + UPHEAVALS_MAX * UPHEAVAL_OPS_MAX);
   const W = MAP_W;

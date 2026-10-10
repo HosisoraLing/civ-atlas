@@ -35,12 +35,26 @@ import { SKETCH_HILLS, SKETCH_ISLES, SKETCH_LAND, SKETCH_MOUNTAIN, SKETCH_NONE, 
 export interface TectonicParams {
   seed: number;
   plates: number;
+  largePlates?: number;
+  smallPlates?: number;
   landFraction: number;
   mountains: number;
 }
 
+export const PLATE_COUNT_KEYS = ['largePlates', 'smallPlates'] as const;
+
+/** Missing fields retain the old generator; these defaults are used only when editing counts. */
+export function plateCounts(p: Pick<TectonicParams, 'plates' | 'largePlates' | 'smallPlates'>) {
+  const total = Number.isFinite(p.plates) ? clamp(Math.round(p.plates), 2, 64) : 30;
+  const largePlates = Number.isFinite(p.largePlates) ? clamp(Math.round(p.largePlates!), 2, 32) : Math.max(2, Math.ceil(total / 3), total - 32);
+  const smallPlates = Number.isFinite(p.smallPlates) ? clamp(Math.round(p.smallPlates!), 0, 32) : clamp(total - largePlates, 0, 32);
+  return { largePlates, smallPlates, plates: largePlates + smallPlates };
+}
+
 export interface Tectonics {
   plateCount: number;
+  /** Explicit size class, 0 = large, 1 = small; absent for older worlds. */
+  plateSmall?: Uint8Array;
   plate: Int16Array;
   /** 每个板块在自己质心处的漂移速度(东、南分量) */
   plateVx: Float32Array;
@@ -476,7 +490,8 @@ export function buildTectonics(mesh: Mesh, p: TectonicParams, sketch?: Sketch | 
   const { n, adjStart, adj, width: W, spacing } = mesh;
   const geo = geometryOf(mesh);
   const rng = mulberry32(subSeed(p.seed, 'plates'));
-  const K = Math.max(3, Math.round(p.plates));
+  const split = p.largePlates !== undefined || p.smallPlates !== undefined ? plateCounts(p) : null;
+  const K = split ? split.plates : Math.max(3, Math.round(p.plates));
   // 细窄的带(海沟、岛弧)至少一个地块宽,粗网格上不至于消失
   const thin = (w: number) => Math.max(w, 0.9 * spacing);
 
@@ -491,7 +506,10 @@ export function buildTectonics(mesh: Mesh, p: TectonicParams, sketch?: Sketch | 
   const plateCount = seeds.length;
   // 生长速度对数正态:面积大致和速度平方成正比 → 板块有大有小
   const rate = new Float32Array(plateCount);
-  for (let k = 0; k < plateCount; k++) rate[k] = clamp(fexp(0.42 * gauss(rng)), 0.5, 1.9);
+  for (let k = 0; k < plateCount; k++) {
+    const variation = clamp(fexp(0.42 * gauss(rng)), 0.5, 1.9);
+    rate[k] = split ? (k < split.largePlates ? 1.25 * variation : 0.25 * variation) : variation;
+  }
 
   const rough = geo.fbm(subSeed(p.seed, 'plate-rough'), 5);
   const fr = 3 / W;
@@ -559,6 +577,9 @@ export function buildTectonics(mesh: Mesh, p: TectonicParams, sketch?: Sketch | 
     geo.clampPoint(q);
     plate[i] = plate0[geo.nearest(q[0], q[1], i)];
   }
+  // Warping can erase very small plates. Seed anchors keep every requested plate present;
+  // the existing fragment merge then retains its connected main component.
+  if (split) seeds.forEach((cell, k) => { plate[cell] = k; });
   mergeFragments(mesh, plate, plateCount);
 
   // ---- 2. 板块速度 + 大陆 / 大洋 ----
@@ -911,6 +932,7 @@ export function buildTectonics(mesh: Mesh, p: TectonicParams, sketch?: Sketch | 
 
   return {
     plateCount,
+    ...(split ? { plateSmall: Uint8Array.from({ length: plateCount }, (_, k) => k < split.largePlates ? 0 : 1) } : {}),
     plate,
     plateVx,
     plateVy,

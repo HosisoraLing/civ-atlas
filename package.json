@@ -2,7 +2,7 @@
   "name": "civ-atlas",
   "private": true,
   "license": "AGPL-3.0-only",
-  "repository": "https://github.com/guaner-334/civ-atlas",
+  "repository": "https://github.com/HosisoraLing/civ-atlas",
   "version": "1.0.0",
   "type": "module",
   "scripts": {

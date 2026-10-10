@@ -162,19 +162,13 @@ export function assistantMessages(ctx: AssistantContext, history: readonly Assis
   const w = cleanWish(ask);
   const prev = history.slice(-HISTORY_TURNS);
   const mat = rewriteMaterial(ctx.world, ctx.civ, ctx.year, ctx.edits, [...prev.map((t) => t.ask), w], ctx.lock);
-  const parts = [mat.text];
-  if (prev.length) {
-    parts.push('', '# 之前的对话(世界已经按执行过的修改更新,上面的材料是现在的样子)');
-    for (const t of prev) {
-      parts.push(`作者:${cleanWish(t.ask)}`);
-      if (t.reply || t.items?.length)
-        parts.push(`你:${t.reply ?? ''}${t.items?.length ? `(列的修改:${t.items.join(';')}${t.applied ? '—— 作者执行了' : '—— 作者没有执行'})` : ''}`);
-    }
-  }
-  parts.push('', '# 作者这次说', w);
   return [
     { role: 'system', content: ASSISTANT_SYSTEM },
-    { role: 'user', content: parts.join('\n') },
+    ...prev.flatMap((t): AiMessage[] => [
+      { role: 'user', content: cleanWish(t.ask) },
+      { role: 'assistant', content: `${t.reply ?? ''}${t.items?.length ? `(列的修改:${t.items.join(';')}${t.applied ? '—— 作者执行了' : '—— 作者没有执行'})` : ''}` },
+    ]),
+    { role: 'user', content: `${mat.text}\n\n# 作者这次说\n${w}` },
   ];
 }
 

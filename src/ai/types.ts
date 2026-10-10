@@ -9,7 +9,7 @@
  */
 
 /** official = 我们提供的 AI(积分);deepseek = DeepSeek 官网 API;bailian = 阿里云百炼;mock = 测试用的假 AI(不联网,冒烟 / 单测用) */
-export type AiProviderKind = 'official' | 'deepseek' | 'bailian' | 'mock';
+export type AiProviderKind = 'official' | 'deepseek' | 'bailian' | 'custom' | 'mock';
 
 export interface AiMessage {
   /** tool = 工具执行的结果(回给模型看) */
@@ -19,6 +19,8 @@ export interface AiMessage {
   toolCalls?: AiToolCall[];
   /** tool:回的是哪一次调用(AiToolCall.id) */
   toolCallId?: string;
+  /** Provider-returned reasoning, kept separate and replayed for thinking tool calls. */
+  reasoning?: string;
 }
 
 /**
@@ -48,7 +50,7 @@ export interface AiRequest {
   maxTokens?: number;
   /** 要求模型只回一个 JSON 对象(起名这类要结构化结果的功能用) */
   json?: boolean;
-  /** 模型可以调用的工具(助手用);给了就关掉深度思考 */
+  /** 模型可以调用的工具(助手用) */
   tools?: AiTool[];
   /** auto = 模型自己决定(默认);none = 这次不许调用,只回话;required = 必须调用 */
   toolChoice?: 'auto' | 'none' | 'required';
@@ -62,6 +64,7 @@ export interface AiUsage {
 export interface AiResult {
   /** 正文;模型只调用工具、没说话时是空串 */
   text: string;
+  reasoning?: string;
   /** 模型要调用的工具(给了 tools 时才可能有) */
   toolCalls?: AiToolCall[];
   provider: AiProviderKind;
@@ -76,6 +79,9 @@ export interface AiResult {
 export interface AiCallOptions {
   /** 流式输出:每收到一段就回调(chunk = 这一段,full = 到目前为止的全文) */
   onDelta?: (chunk: string, full: string) => void;
+  onReasoningDelta?: (chunk: string, full: string) => void;
+  /** Internal recording hook: actual messages after context compaction. */
+  onRequestMessages?: (messages: AiMessage[]) => void;
   signal?: AbortSignal;
 }
 
@@ -110,6 +116,8 @@ export interface AiCallRecord {
   title?: string;
   /** 用的哪家;'none' = 还没选任何一家(这次调用直接失败) */
   provider: AiProviderKind | 'none';
+  /** Custom service name captured when the request started. */
+  providerLabel?: string;
   model: string;
   ok: boolean;
   /** 失败时的错误码和中文说明 */
@@ -120,6 +128,7 @@ export interface AiCallRecord {
   /** 发出去的消息和收到的全文(用户可在记录里展开看;太长的截断) */
   messages: AiMessage[];
   text?: string;
+  reasoning?: string;
   /** 模型要调用的工具 */
   toolCalls?: AiToolCall[];
   /** 调用时在看哪颗星球(种子 + 参数,同 savefile 的 worldKey),可空 */

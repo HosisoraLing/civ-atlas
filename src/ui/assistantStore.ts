@@ -1,3 +1,5 @@
+import { dataStorage } from "../account/wikiStorage";
+import { worldDataChanged } from "./saveStore";
 /**
  * 助手面板的状态:作者问一句或说想怎么改 → 助手自己查资料、在后台试推演、看了结果再调 → 回话,要改世界的列成确认单,
  * 作者点了执行才改。纯状态,不碰 DOM(单测里用假 AI 跑完整流程)。循环、工具、提示词在 ai/agent/,面板在 Assistant.tsx。
@@ -121,6 +123,7 @@ export interface AsTurn {
   steps: AsStep[];
   /** 回给作者的话(做的时候是这一轮模型正在说的) */
   text: string;
+  reasoning?: { round: number; text: string }[];
   proposal?: AsProposal;
   /** 没勾的几条(下标) */
   off?: number[];
@@ -181,7 +184,7 @@ interface Saved {
 
 function load(w: string): AsTurn[] {
   try {
-    const raw = localStorage.getItem(KEY(w));
+    const raw = dataStorage()!.getItem(KEY(w));
     if (!raw) return [];
     const v = JSON.parse(raw) as Saved;
     // 生成算法换过:同一个种子的历史不一样了,原来的确认单、结果对不上
@@ -197,8 +200,9 @@ function save() {
   if (!w) return;
   try {
     const turns = state.turns.filter((t) => t.status !== 'working').slice(-KEEP);
-    if (turns.length) localStorage.setItem(KEY(w), JSON.stringify({ gen: GENERATOR_VERSION, turns } satisfies Saved));
-    else localStorage.removeItem(KEY(w));
+    if (turns.length) dataStorage()!.setItem(KEY(w), JSON.stringify({ gen: GENERATOR_VERSION, turns } satisfies Saved));
+    else dataStorage()!.removeItem(KEY(w));
+    worldDataChanged(w);
   } catch {
     /* 存不下 / 隐私模式:只管这一次 */
   }
@@ -353,6 +357,7 @@ export async function sendAsk(ctx: AskContext, text: string): Promise<number> {
       onProposal: (p) => (got = p),
       onEvent: (e) => {
         if (e.type === 'round') live(() => ({ text: '' }));
+        else if (e.type === 'reasoning') live(t => ({ reasoning: [...(t.reasoning ?? []).filter(r => r.round !== e.round), { round: e.round, text: e.text }] }));
         else if (e.type === 'text') live(() => ({ text: e.text }));
         else if (e.type === 'step') live((t) => ({ steps: [...t.steps, stepOf(e.step)] }));
         else if (e.type === 'step-done') {

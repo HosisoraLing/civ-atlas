@@ -1,3 +1,4 @@
+import { wikiMode } from "./wikiStorage";
 /**
  * 网站服务器(账号、云同步、分享短链接、我们的 AI 共用一台):地址和请求。
  *
@@ -11,6 +12,7 @@ let override: string | null | undefined;
 /** 服务器地址;null = 没有服务器 */
 export function serverBase(): string | null {
   if (override !== undefined) return override;
+  if (wikiMode()) return '/api/v1/civ-atlas';
   const env = (import.meta.env?.VITE_AI_SERVER as string | undefined)?.trim();
   if (env) return env.replace(/\/+$/, '');
   // 开发时:网址加 aiServer=fake 用本地假服务器(vite.config.ts 里挂的);正式构建里这段不生效
@@ -91,7 +93,10 @@ export async function call<T>(path: string, init: CallInit = {}): Promise<T> {
   if (!base) throw new ServerError(0, 'not-configured', '还没有开放');
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (init.token) headers.Authorization = `Bearer ${init.token}`;
+  if (init.token) {
+    if (wikiMode()) headers['X-Civ-Atlas-User'] = init.token.replace(/^wiki:/, '');
+    else headers.Authorization = `Bearer ${init.token}`;
+  }
   const ctl = typeof AbortController === 'undefined' ? null : new AbortController();
   const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : undefined;
   let res: Response;
@@ -102,7 +107,7 @@ export async function call<T>(path: string, init: CallInit = {}): Promise<T> {
         method: init.method ?? 'GET',
         headers,
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
-        credentials: 'omit',
+        credentials: wikiMode() ? 'same-origin' : 'omit',
         signal: ctl?.signal,
       });
     } catch {

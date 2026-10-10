@@ -16,6 +16,7 @@
 import { AiError, type AiCallOptions, type AiMessage, type AiRequest, type AiResult, type AiToolCall, type AiUsage } from '../types';
 import { idleTimer, readSse } from '../sse';
 import { scrubSecrets } from '../settings';
+import { fitContext } from '../tuning';
 
 export interface CompatConfig {
   /** 界面上的名字,用在中文报错里:"DeepSeek""阿里云百炼" */
@@ -29,6 +30,9 @@ export interface CompatConfig {
   mapError?: (e: HttpErrorInfo) => AiError | null;
   /** 多久没收到任何数据就算超时(毫秒) */
   idleMs?: number;
+  contextLength?: number;
+  /** OpenAI uses max_completion_tokens for visible output plus reasoning. */
+  completionTokens?: boolean;
 }
 
 export interface HttpErrorInfo {
@@ -53,15 +57,15 @@ export function withJsonHint(messages: AiMessage[]): AiMessage[] {
 }
 
 /** 拼请求体(单测检查 json 模式等参数) */
-export function compatBody(cfg: Pick<CompatConfig, 'model' | 'extra'>, req: AiRequest): Record<string, unknown> {
+export function compatBody(cfg: Pick<CompatConfig, 'model' | 'extra' | 'contextLength' | 'completionTokens'>, req: AiRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: cfg.model,
-    messages: (req.json ? withJsonHint(req.messages) : req.messages).map(wireMessage),
+    messages: fitContext({ ...req, messages: req.json ? withJsonHint(req.messages) : req.messages }, cfg.contextLength).map(wireMessage),
     stream: true,
     stream_options: { include_usage: true },
   };
-  if (req.temperature !== undefined) body.temperature = req.temperature;
-  if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
+  if (req.temperature !== undefined && !cfg.completionTokens) body.temperature = req.temperature;
+  if (req.maxTokens !== undefined) body[cfg.completionTokens ? 'max_completion_tokens' : 'max_tokens'] = req.maxTokens;
   if (req.json) body.response_format = { type: 'json_object' };
   if (req.tools?.length) {
     body.tools = req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
@@ -78,10 +82,11 @@ export function wireMessage(m: AiMessage): Record<string, unknown> {
       role: 'assistant',
       // 没说话时写空串:两家自己回的就是空串(写 null 有的兼容接口不认)
       content: m.content ?? '',
+      ...(m.reasoning !== undefined ? { reasoning_content: m.reasoning } : {}),
       tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.args } })),
     };
   }
-  return { role: m.role, content: m.content };
+  return { role: m.role, content: m.content, ...(m.role === 'assistant' && m.reasoning !== undefined ? { reasoning_content: m.reasoning } : {}) };
 }
 
 /** 流式送来的工具调用:按 index 一段段拼起来 */
@@ -171,7 +176,20 @@ export function mapHttpError(name: string, e: HttpErrorInfo, model: string): AiE
 
 /** 调一次 OpenAI 兼容接口:流式读回,返回全文和用量 */
 export async function compatChat(cfg: CompatConfig, req: AiRequest, opts: AiCallOptions): Promise<Omit<AiResult, 'provider' | 'ms'>> {
+  if (opts.signal?.aborted) throw new AiError('aborted', '已取消');
   const idleMs = cfg.idleMs ?? IDLE_MS;
+  // Allow thinking output without consuming the entire context on a small configured window.
+  const thinking = cfg.extra?.enable_thinking === true || (cfg.extra?.thinking as { type?: string })?.type === 'enabled' || (cfg.extra?.reasoning_effort && cfg.extra.reasoning_effort !== 'none');
+  if (thinking) {
+    const output = req.maxTokens ?? 2000;
+    const budget = Math.max(8192, Number(cfg.extra?.thinking_budget ?? 0) + output);
+    const available = cfg.contextLength ? Math.floor(cfg.contextLength / 2) : 32768;
+    req = { ...req, maxTokens: Math.max(output, Math.min(budget, available)) };
+  } else if (cfg.contextLength && req.maxTokens === undefined) {
+    req = { ...req, maxTokens: 2000 };
+  }
+  const prepared = { ...req, messages: fitContext({ ...req, messages: req.json ? withJsonHint(req.messages) : req.messages }, cfg.contextLength) };
+  opts.onRequestMessages?.(prepared.messages);
   if (opts.signal?.aborted) throw new AiError('aborted', '已取消');
   const idle = idleTimer(opts.signal, idleMs);
   const arm = idle.arm;
@@ -190,7 +208,7 @@ export async function compatChat(cfg: CompatConfig, req: AiRequest, opts: AiCall
       res = await fetch(cfg.url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', Authorization: `Bearer ${cfg.key}` },
-        body: JSON.stringify(compatBody(cfg, req)),
+        body: JSON.stringify(compatBody(cfg, prepared)),
         signal: idle.signal,
         // 不带 cookie、不带来源页地址:只把请求本身发给服务商
         credentials: 'omit',
@@ -206,6 +224,8 @@ export async function compatChat(cfg: CompatConfig, req: AiRequest, opts: AiCall
     }
 
     let text = '';
+    let reasoning = '';
+    let hasReasoning = false;
     let usage: AiUsage | undefined;
     let model = cfg.model;
     let finish = '';
@@ -224,8 +244,15 @@ export async function compatChat(cfg: CompatConfig, req: AiRequest, opts: AiCall
         text += piece;
         opts.onDelta?.(piece, text);
       }
+      const thought = ch?.delta?.reasoning_content ?? ch?.message?.reasoning_content ?? ch?.delta?.reasoning ?? ch?.message?.reasoning;
+      if (typeof thought === 'string') {
+        hasReasoning = true;
+        reasoning += thought;
+        if (thought) opts.onReasoningDelta?.(thought, reasoning);
+      }
       tools.add(ch?.delta?.tool_calls ?? ch?.message?.tool_calls);
       if (ch?.finish_reason) finish = String(ch.finish_reason);
+      if (opts.signal?.aborted) throw new AiError('aborted', '已取消');
     };
 
     const type = res.headers.get('content-type') ?? '';
@@ -263,16 +290,16 @@ export async function compatChat(cfg: CompatConfig, req: AiRequest, opts: AiCall
       throw new AiError('content-filter', `${cfg.name} 的内容安全审核拦下了这次回复,换个说法再试`);
     }
     const toolCalls = tools.calls();
-    if (toolCalls.length) return { text, toolCalls, model, usage };
+    if (toolCalls.length) return { text, ...(hasReasoning ? { reasoning } : {}), toolCalls, model, usage };
     // 带着工具、刚交回工具结果:模型看结果已经摆在那儿,正常收尾不说话也行(要不要算空回复由助手循环定)
-    if (!text && finish === 'stop' && req.tools?.length && req.messages.some((m) => m.role === 'tool')) return { text, model, usage };
+    if (!text && finish === 'stop' && req.tools?.length && req.messages.some((m) => m.role === 'tool')) return { text, ...(hasReasoning ? { reasoning } : {}), model, usage };
     if (!text) {
       throw new AiError(
         'bad-response',
         finish === 'length' ? `${cfg.name} 还没写出正文就到了长度上限(开着深度思考时容易这样),可以关掉深度思考再试` : `${cfg.name} 返回了空回复,请再试一次`,
       );
     }
-    return { text, model, usage };
+    return { text, ...(hasReasoning ? { reasoning } : {}), model, usage };
   } finally {
     idle.dispose();
   }

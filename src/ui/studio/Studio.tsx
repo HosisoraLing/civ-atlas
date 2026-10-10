@@ -26,7 +26,8 @@ import type { DraftBase } from '../stageStore';
 import { getEdits, useEdits } from '../editsStore';
 import { TerrainCaption, TerrainPanel, setTerrainTool, terrainSide, useTerrainTool } from '../TerrainTools';
 import { useImportOn } from '../ImportImage';
-import { ParamSlider, SLIDERS, paramsSide } from '../WorldOverviewGenesis';
+import { ParamSlider, SLIDERS, paramsSide, paramValue } from '../WorldOverviewGenesis';
+import { plateCounts } from '../../gen/tectonics';
 import { openAiSettings } from '../AiSettings';
 import { AiSettingsItem, MenuItem, MenuSep, PopMenu } from '../PopMenu';
 import { AssistantPanel } from '../Assistant';
@@ -641,7 +642,7 @@ export function Studio(p: StudioProps) {
     else setSeedText(String(p.params.seed));
   };
   const intro0 = base ? `设定都带过来了，改完存成一个新世界，${base.title}本身不变。` : '先定下这颗星球的样子。创建以后，再推演它三千年的历史。';
-  const isDefault = SLIDERS.every((s) => p.params[s.key] === DEFAULT_PARAMS[s.key]);
+  const isDefault = SLIDERS.every((s) => paramValue(p.params, s.key) === paramValue(DEFAULT_PARAMS, s.key));
   const canAsk = p.ready && !intro && !capOn && !!p.civ && !!p.raw;
   const ico = p.phone ? 18 : 17;
   const peek = p.phone && !sheetFull && !tool.on;
@@ -711,7 +712,7 @@ export function Studio(p: StudioProps) {
               data-act="params-reset"
               onClick={(e) => {
                 e.stopPropagation();
-                p.onParams({ ...DEFAULT_PARAMS, seed: p.params.seed });
+                p.onParams({ ...DEFAULT_PARAMS, ...plateCounts(DEFAULT_PARAMS), seed: p.params.seed });
               }}
             >
               恢复默认
@@ -724,8 +725,12 @@ export function Studio(p: StudioProps) {
       </button>
       {paramsOpen && (
         <div className="nw-sliders">
+          <div className="nw-group-hint" data-param="plates-total">板块总数：{p.params.largePlates !== undefined || p.params.smallPlates !== undefined ? plateCounts(p.params).plates : `${p.params.plates}（原版随机大小，调整数量后应用配比）`}</div>
           {SLIDERS.map((s) => (
-            <ParamSlider key={s.key} s={s} value={p.params[s.key]} onCommit={(v) => p.onParams({ ...p.params, [s.key]: v })} />
+            <ParamSlider key={s.key} s={s} value={paramValue(p.params, s.key)} onCommit={v => {
+              const counts = s.key === 'largePlates' || s.key === 'smallPlates' ? plateCounts({ ...p.params, ...plateCounts(p.params), [s.key]: v }) : {};
+              p.onParams({ ...p.params, [s.key]: v, ...counts });
+            }} />
           ))}
         </div>
       )}
